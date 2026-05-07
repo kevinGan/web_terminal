@@ -1,0 +1,19 @@
+import type { FastifyInstance } from 'fastify';
+import QRCode from 'qrcode';
+
+export async function registerQR(app: FastifyInstance, getUrl: () => string) {
+  app.get<{ Querystring: { format?: string } }>('/qr', async (req, reply) => {
+    const url = getUrl();
+    const format = req.query.format ?? 'svg';
+    if (format === 'png') {
+      const buf = await QRCode.toBuffer(url, { type: 'png', margin: 1, width: 320 });
+      reply.header('content-type', 'image/png').send(buf);
+      return reply;
+    }
+    const svg = await QRCode.toString(url, { type: 'svg', margin: 1 });
+    reply.header('content-type', 'image/svg+xml').send(svg);
+    return reply;
+  });
+
+  app.get('/api/connection', async () => ({ url: getUrl() }));
+}

@@ -1,0 +1,27 @@
+{
+  "name": "web-terminal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.15.1",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "postinstall": "node scripts/fix-node-pty-perms.mjs",
+    "dev": "concurrently -n server,web -c blue,green \"pnpm -F @wt/server dev\" \"pnpm -F @wt/web dev\"",
+    "build": "pnpm -F @wt/web build && pnpm -F @wt/server build",
+    "start": "pnpm -F @wt/server start",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1",
+    "typescript": "^5.5.4"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "node-pty"
+    ]
+  }
+}
