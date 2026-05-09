@@ -69,9 +69,18 @@ function handleConnection(
         rows: clampDim(msg.rows, 24),
         cwd: msg.cwd
       });
-      sendJson(socket, { type: 'ready', sessionId: session.id, cwd: session.cwd, title: session.title });
-      // Replay buffer for reconnect
+      // `replayed` lets the client decide whether to write its own
+      // localStorage scrollback snapshot: when the server has the buffer
+      // (true), client stays quiet to avoid duplication; when this is a fresh
+      // PTY (false, e.g. after server restart), client paints its snapshot.
       const snap = session.snapshot();
+      sendJson(socket, {
+        type: 'ready',
+        sessionId: session.id,
+        cwd: session.cwd,
+        title: session.title,
+        replayed: snap.length > 0
+      });
       if (snap.length > 0) socket.send(snap);
       // Stream new data
       disposers.push(session.onData((chunk) => socket.send(chunk)));

@@ -18,13 +18,14 @@ export function Terminal({ leafId, initialSessionId, initialCwd, isActive, tabId
   const selectLeaf = useTabsStore((s) => s.selectLeaf);
   const touchPrimary = isTouchPrimary();
 
-  // Auto-focus only on devices with a real keyboard. On touch devices, focusing
-  // the hidden xterm textarea pops the soft keyboard — let the user opt in by
-  // explicitly tapping the terminal area instead.
+  // Auto-focus only on devices with a real keyboard. On touch devices we never
+  // call focus() implicitly — even tapping the terminal area no longer pops
+  // the soft keyboard, since users hit nearby buttons (panels, virtual keys)
+  // by accident. Use the dedicated ⌨ button in the virtual-keys row to opt in.
   useEffect(() => {
     if (!isActive) {
-      // When the terminal becomes inactive, drop focus so the OS can dismiss the
-      // soft keyboard and so cd injections from side panels don't keep it open.
+      // When the terminal becomes inactive, drop focus so the OS dismisses the
+      // soft keyboard and cd injections from side panels don't keep it open.
       blur();
       return;
     }
@@ -42,8 +43,7 @@ export function Terminal({ leafId, initialSessionId, initialCwd, isActive, tabId
   }, [isActive, fit]);
 
   // On touch devices, dismiss any lingering keyboard when the user touches the
-  // pane chrome (outside xterm-host); the explicit click-on-textarea path will
-  // re-focus when they actually want to type.
+  // pane chrome (outside xterm-host). Re-show via the ⌨ virtual key.
   const onPaneTouchStart = (e: React.TouchEvent) => {
     selectLeaf(tabId, leafId);
     if (touchPrimary && e.target === e.currentTarget) blur();
@@ -58,7 +58,7 @@ export function Terminal({ leafId, initialSessionId, initialCwd, isActive, tabId
       <div
         ref={containerRef}
         className="xterm-host"
-        onClick={() => { if (touchPrimary) focus(); }}
+        onClick={() => { if (!touchPrimary) focus(); }}
       />
       <PaneCloseButton tabId={tabId} leafId={leafId} />
     </div>

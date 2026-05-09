@@ -70,6 +70,26 @@ export function TabBar() {
     }
   }, [editingId]);
 
+  // Cmd+D (horizontal) / Cmd+Shift+D (vertical) split shortcuts (macOS only).
+  // We deliberately do NOT fire on `ctrlKey`: Ctrl+D is the standard EOF binding
+  // in Linux/Windows terminals, and clobbering it breaks shells, REPLs, etc.
+  // Capture phase so we beat xterm's keydown handler and the browser's
+  // bookmark binding. `e.code` is layout-independent (Shift makes `e.key === 'D'`).
+  // Skipped while editing a tab label so the input keeps native behavior.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== 'KeyD') return;
+      if (!e.metaKey) return;
+      if (e.altKey || e.ctrlKey) return;
+      if (editingId) return;
+      e.preventDefault();
+      e.stopPropagation();
+      splitActive(e.shiftKey ? 'v' : 'h');
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [splitActive, editingId]);
+
   const beginEdit = (id: string, label: string) => {
     setEditingId(id);
     setDraft(label);
@@ -147,8 +167,8 @@ export function TabBar() {
       </div>
       {responsive.device !== 'mobile' && (
         <div className="tab-actions">
-          <button className="iconbtn" onClick={() => splitActive('h')} title="水平分屏 (左右)">⇆</button>
-          <button className="iconbtn" onClick={() => splitActive('v')} title="垂直分屏 (上下)">⇅</button>
+          <button className="iconbtn" onClick={() => splitActive('h')} title="水平分屏 (左右) — ⌘D">⇆</button>
+          <button className="iconbtn" onClick={() => splitActive('v')} title="垂直分屏 (上下) — ⇧⌘D">⇅</button>
           <button className="iconbtn" onClick={() => closeActiveLeaf()} title="关闭当前面板">✕</button>
         </div>
       )}

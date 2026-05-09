@@ -1,7 +1,7 @@
 import { getToken } from './token';
 
 export type WsControlIn =
-  | { type: 'ready'; sessionId: string; cwd: string; title: string }
+  | { type: 'ready'; sessionId: string; cwd: string; title: string; replayed?: boolean }
   | { type: 'cwd'; path: string }
   | { type: 'title'; text: string }
   | { type: 'exit'; exitCode: number; signal?: number }
@@ -15,13 +15,25 @@ export type WsControlOut =
 export interface PtyConnHandlers {
   onBinary: (data: Uint8Array) => void;
   onControl: (msg: WsControlIn) => void;
+  /** Fires once per WS close (each disconnect, including reconnect retries). */
   onClose: (event: { code: number; reason: string }) => void;
+  /** Optional: fires whenever a fresh WS becomes OPEN (initial + each reconnect). */
+  onOpen?: () => void;
+  /** Optional: fires when reconnect attempts begin / end. */
+  onReconnecting?: (info: { attempt: number; delayMs: number }) => void;
 }
+
+// Auth/policy close codes from our server — no point retrying these.
+const TERMINAL_CLOSE_CODES = new Set([1000, 1001, 1005, 4001, 4003]);
+const MAX_BACKOFF_MS = 10_000;
+const BASE_BACKOFF_MS = 500;
 
 export class PtyConn {
   private ws: WebSocket | null = null;
-  private closed = false;
+  private disposed = false;
   private queue: Array<Uint8Array | string> = [];
+  private retryCount = 0;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly init: () => WsControlOut,
@@ -29,13 +41,22 @@ export class PtyConn {
   ) {}
 
   open(): void {
+    if (this.disposed) return;
     const token = getToken();
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const url = `${proto}//${window.location.host}/ws/terminal${token ? `?token=${encodeURIComponent(token)}` : ''}`;
-    const ws = new WebSocket(url);
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(url);
+    } catch {
+      // Synchronous construction failure (rare). Schedule a retry.
+      this.scheduleReconnect();
+      return;
+    }
     ws.binaryType = 'arraybuffer';
     this.ws = ws;
     ws.addEventListener('open', () => {
+      this.retryCount = 0;
       ws.send(JSON.stringify(this.init()));
       // flush queue
       for (const m of this.queue) {
@@ -43,6 +64,7 @@ export class PtyConn {
         else ws.send(m);
       }
       this.queue = [];
+      this.handlers.onOpen?.();
     });
     ws.addEventListener('message', (ev) => {
       if (typeof ev.data === 'string') {
@@ -56,12 +78,38 @@ export class PtyConn {
       }
     });
     ws.addEventListener('close', (ev) => {
-      this.closed = true;
+      this.ws = null;
       this.handlers.onClose({ code: ev.code, reason: ev.reason });
+      // Server-imposed terminal codes (auth/policy/clean exit) → don't retry.
+      // Anything else (network blip, server restart, transient error) → retry.
+      if (this.disposed) return;
+      if (TERMINAL_CLOSE_CODES.has(ev.code)) return;
+      this.scheduleReconnect();
     });
     ws.addEventListener('error', () => {
       // 'close' fires after this for actual disconnect.
     });
+  }
+
+  private scheduleReconnect(): void {
+    if (this.disposed || this.retryTimer) return;
+    // Exponential backoff with jitter, capped at MAX_BACKOFF_MS.
+    const exp = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * Math.pow(1.5, this.retryCount));
+    const delayMs = Math.floor(exp * (0.7 + Math.random() * 0.6));
+    this.retryCount++;
+    this.handlers.onReconnecting?.({ attempt: this.retryCount, delayMs });
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      this.open();
+    }, delayMs);
+  }
+
+  /** Force an immediate reconnect attempt (cancels any pending backoff). */
+  reconnectNow(): void {
+    if (this.disposed) return;
+    if (this.retryTimer) { clearTimeout(this.retryTimer); this.retryTimer = null; }
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
+    this.open();
   }
 
   /** Send raw stdin bytes. */
@@ -89,9 +137,10 @@ export class PtyConn {
   }
 
   close(): void {
-    this.closed = true;
+    this.disposed = true;
+    if (this.retryTimer) { clearTimeout(this.retryTimer); this.retryTimer = null; }
     try { this.ws?.close(1000, 'client_close'); } catch {}
   }
 
-  get isClosed() { return this.closed; }
+  get isClosed() { return this.disposed; }
 }

@@ -1,6 +1,12 @@
 import { useState } from 'react';
-import { typeInActiveTerminal, runInActiveTerminal, getActiveTerminalLeaf } from '../store/active';
+import {
+  typeInActiveTerminal,
+  runInActiveTerminal,
+  getActiveTerminalLeaf,
+  toggleActiveTerminalKeyboard
+} from '../store/active';
 import { useTabsStore } from '../store/tabs';
+import { terminalRegistry } from '../store/terminalRegistry';
 import { ClaudeCommandPicker } from './ClaudeCommandPicker';
 import { GitCommandPicker } from './GitCommandPicker';
 import { VoiceInputButton } from './VoiceInputButton';
@@ -17,10 +23,25 @@ interface KeyDef {
   /** When provided, used instead of send/run as a slash-commands picker. */
   picker?: 'claude' | 'git';
   voice?: boolean;
+  /**
+   * When true, this key explicitly manages soft-keyboard visibility itself.
+   * Otherwise the textarea is force-blurred after the action so iOS won't
+   * restore the soft keyboard from a stale `document.activeElement`.
+   */
+  managesKeyboard?: boolean;
 }
+
+const KBD_KEY: KeyDef = {
+  label: '⌨',
+  onClick: () => toggleActiveTerminalKeyboard(),
+  className: 'kbd kbd-toggle',
+  ariaLabel: '显示/隐藏软键盘',
+  managesKeyboard: true
+};
 
 const NORMAL_KEYS: KeyDef[] = [
   { label: '🤖 claude', run: 'claude --dangerously-skip-permissions', className: 'claude wide', ariaLabel: 'Start Claude' },
+  KBD_KEY,
   { label: 'Tab', send: '\t' },
   { label: 'Esc', send: '\x1b' },
   { label: '↑', send: '\x1b[A' },
@@ -36,6 +57,7 @@ const NORMAL_KEYS: KeyDef[] = [
 
 const CLAUDE_KEYS: KeyDef[] = [
   { label: '⇧⇥ Mode', send: '\x1b[Z', className: 'mode wide', ariaLabel: 'Shift+Tab cycle Claude mode' },
+  KBD_KEY,
   { label: '↵ 回车', send: '\r', className: 'enter' },
   { label: '🎤 语音', voice: true, className: 'voice' },
   { label: '↑', send: '\x1b[A' },
@@ -83,6 +105,15 @@ export function VirtualKeys() {
                 if (k.onClick) k.onClick();
                 else if (k.run != null) runInActiveTerminal(k.run);
                 else if (k.send != null) typeInActiveTerminal(k.send);
+                // iOS keeps the soft keyboard up as long as a textarea is the
+                // document.activeElement, even after the user dismisses it.
+                // Tapping any non-keyboard key would then "pop" the keyboard
+                // back via iOS's gesture-restore heuristic. Force-blurring
+                // makes ⌨ the only path that brings the keyboard up.
+                if (!k.managesKeyboard) {
+                  const leaf = getActiveTerminalLeaf();
+                  if (leaf) terminalRegistry.blur(leaf.leaf.id);
+                }
               }}
             >{k.label}</button>
           );

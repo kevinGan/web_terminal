@@ -1,10 +1,5 @@
-import { useTabsStore, type Pane } from './tabs';
+import { useTabsStore, findLeaf, firstTerminal, type Pane } from './tabs';
 import { terminalRegistry } from './terminalRegistry';
-
-function findLeaf(pane: Pane, id: string): Pane | null {
-  if (pane.kind === 'leaf') return pane.id === id ? pane : null;
-  return findLeaf(pane.a, id) ?? findLeaf(pane.b, id);
-}
 
 export function getActiveTerminalLeaf(): { tabId: string; leaf: Pane } | null {
   const s = useTabsStore.getState();
@@ -18,11 +13,6 @@ export function getActiveTerminalLeaf(): { tabId: string; leaf: Pane } | null {
     return { tabId: tab.id, leaf: fallback };
   }
   return { tabId: tab.id, leaf };
-}
-
-function firstTerminal(pane: Pane): Pane | null {
-  if (pane.kind === 'leaf') return pane.type === 'terminal' ? pane : null;
-  return firstTerminal(pane.a) ?? firstTerminal(pane.b);
 }
 
 /**
@@ -57,4 +47,20 @@ export function activeCwd(): string | null {
   const a = getActiveTerminalLeaf();
   if (!a || a.leaf.kind !== 'leaf' || a.leaf.type !== 'terminal') return null;
   return a.leaf.cwd ?? null;
+}
+
+/**
+ * Toggle the soft keyboard for the active terminal. Returns true if the
+ * keyboard is now showing (textarea was focused), false if hidden or no-op.
+ * Used by the dedicated ⌨ button on mobile.
+ */
+export function toggleActiveTerminalKeyboard(): boolean {
+  const a = getActiveTerminalLeaf();
+  if (!a) return false;
+  if (terminalRegistry.isFocused(a.leaf.id)) {
+    terminalRegistry.blur(a.leaf.id);
+    return false;
+  }
+  terminalRegistry.focus(a.leaf.id);
+  return true;
 }

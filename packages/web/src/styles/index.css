@@ -417,6 +417,7 @@ input { font: inherit; color: inherit; }
 .vk.danger { background: var(--bg-elev-3); color: var(--danger); }
 .vk.picker { background: var(--bg-elev-3); color: var(--warn); font-weight: 600; }
 .vk.voice { background: var(--bg-elev-3); color: var(--accent-2); }
+.vk.kbd { background: var(--bg-elev-3); color: var(--accent); font-size: 18px; }
 .vk.voice.listening { background: var(--danger); color: #11111b; animation: pulse-listen 1s infinite; }
 .vk.disabled { opacity: 0.5; }
 @keyframes pulse-listen {
@@ -512,4 +513,169 @@ input { font: inherit; color: inherit; }
 .layout.d-mobile { font-size: 13px; }
 @media (max-width: 480px) {
   .virtual-keys { grid-template-columns: repeat(6, 1fr); }
+}
+
+/* ===== Git Panel ===== */
+.git-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.git-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.git-panel-title { flex: 1; min-width: 0; display: flex; gap: 6px; align-items: baseline; }
+.git-branch { color: var(--accent); font-weight: 600; }
+.git-branch-none { color: var(--fg-faint); font-weight: 400; }
+.git-head { color: var(--fg-faint); font-family: monospace; font-size: 12px; }
+.git-refresh {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  border-radius: var(--radius);
+  width: 28px; height: 24px;
+  cursor: pointer;
+}
+.git-refresh:hover:not(:disabled) { background: var(--bg-elev-2); color: var(--fg); }
+.git-refresh:disabled { opacity: 0.5; cursor: default; }
+
+.git-cwd {
+  padding: 4px 10px;
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 0 auto;
+}
+
+.git-panel-empty, .git-status-error {
+  padding: 16px 10px;
+  color: var(--fg-faint);
+  font-size: 13px;
+  text-align: center;
+}
+.git-status-error { color: var(--danger); }
+
+.git-changes {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 0;
+}
+.git-group { padding: 4px 0; }
+.git-group-title {
+  margin: 0;
+  padding: 4px 10px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-dim);
+  font-weight: 600;
+}
+.git-group-count { color: var(--fg-faint); font-weight: 400; margin-left: 4px; }
+.git-group-list { list-style: none; margin: 0; padding: 0; }
+
+.git-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 10px;
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+  font-size: 13px;
+}
+.git-row:hover { background: var(--bg-elev-2); }
+.git-row.selected { background: var(--bg-elev-3); }
+.git-status {
+  flex: 0 0 16px;
+  font-family: monospace;
+  font-weight: bold;
+  text-align: center;
+}
+.git-status-M { color: var(--warn); }
+.git-status-A { color: var(--accent-2); }
+.git-status-D { color: var(--danger); }
+.git-status-R { color: var(--accent); }
+.git-status-C { color: var(--accent); }
+.git-status-T { color: var(--warn); }
+.git-status-U { color: var(--danger); }
+.git-status-\? { color: var(--accent-2); }
+.git-path {
+  flex: 1 1 auto;
+  font-family: monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+.git-numstat { flex: 0 0 auto; font-family: monospace; font-size: 11px; display: flex; gap: 4px; }
+.git-adds { color: var(--accent-2); }
+.git-dels { color: var(--danger); }
+
+/* ===== Diff Pane (right-side tab) ===== */
+.diff-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg);
+}
+.diff-pane-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  flex: 0 0 auto;
+}
+.diff-pane-kind {
+  font-family: monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--bg-elev-3);
+  color: var(--fg-dim);
+}
+.diff-pane-kind-staged { color: var(--accent); background: rgba(137, 180, 250, 0.15); }
+.diff-pane-kind-unstaged { color: var(--warn); background: rgba(249, 226, 175, 0.15); }
+.diff-pane-kind-untracked { color: var(--accent-2); background: rgba(148, 226, 213, 0.15); }
+.diff-pane-path {
+  flex: 1 1 auto;
+  font-family: monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+.diff-pane-cwd { color: var(--fg-faint); font-family: monospace; font-size: 11px; }
+.diff-pane-body { flex: 1 1 auto; overflow: auto; min-height: 0; }
+.diff-pane-empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--fg-faint);
+  font-size: 13px;
+}
+.diff-pane-error { color: var(--danger); }
+.diff-pane-truncated {
+  padding: 6px 10px;
+  background: var(--bg-elev-2);
+  color: var(--warn);
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
 }

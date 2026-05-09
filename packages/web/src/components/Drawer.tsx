@@ -3,6 +3,7 @@ import { useResponsive } from '../hooks/useResponsive';
 import { BookmarkPanel } from './BookmarkPanel';
 import { HistoryPanel } from './HistoryPanel';
 import { FileTree } from './FileTree';
+import { GitPanel } from './GitPanel';
 import { SnippetPanel } from './SnippetPanel';
 import { SettingsPanel } from './SettingsPanel';
 import { NotificationToggle } from './NotificationToggle';
@@ -21,6 +22,7 @@ export function Drawer() {
         <button className={activePanel === 'bookmarks' ? 'on' : ''} onClick={() => selectPanel('bookmarks')}>★ 书签</button>
         <button className={activePanel === 'history' ? 'on' : ''} onClick={() => selectPanel('history')}>⏱ 历史</button>
         <button className={activePanel === 'files' ? 'on' : ''} onClick={() => selectPanel('files')}>📁 文件</button>
+        <button className={activePanel === 'git' ? 'on' : ''} onClick={() => selectPanel('git')}>⎇ Git</button>
         <button className={activePanel === 'snippets' ? 'on' : ''} onClick={() => selectPanel('snippets')}>⌘ 片段</button>
         <button className={activePanel === 'settings' ? 'on' : ''} onClick={() => selectPanel('settings')}>⚙ 设置</button>
         <button className="drawer-close" aria-label="close" onClick={() => selectPanel(null)}>×</button>
@@ -29,6 +31,7 @@ export function Drawer() {
         {activePanel === 'bookmarks' && <BookmarkPanel />}
         {activePanel === 'history' && <HistoryPanel />}
         {activePanel === 'files' && <FileTree />}
+        {activePanel === 'git' && <GitPanel />}
         {activePanel === 'snippets' && <SnippetPanel />}
         {activePanel === 'settings' && <SettingsPanel />}
       </div>

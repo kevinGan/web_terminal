@@ -2,6 +2,7 @@ import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import type { Pane, Tab } from '../store/tabs';
 import { useTabsStore } from '../store/tabs';
 import { Terminal } from './Terminal';
+import { DiffPane } from './DiffPane';
 
 interface Props { tab: Tab; tabActive: boolean; }
 
@@ -38,7 +39,9 @@ function PaneNode({ pane, tab, tabActive }: { pane: Pane; tab: Tab; tabActive: b
   }
   // Only the currently visible tab's active leaf is "the focused pane".
   const isLeafActive = tabActive && tab.activeLeafId === pane.id;
-  // The only kind of leaf left is `terminal` — the legacy fileTree leaf was retired.
+  if (pane.type === 'diff') {
+    return <DiffPane key={pane.id} cwd={pane.cwd} file={pane.file} diffKind={pane.diffKind} />;
+  }
   return (
     <Terminal
       key={pane.id}

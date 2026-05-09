@@ -21,6 +21,7 @@ import { registerClaudeCommands } from './routes/claude-commands.js';
 import { registerQR } from './routes/qr.js';
 import { registerSessions } from './routes/sessions.js';
 import { registerWorkspaceState } from './routes/state.js';
+import { registerGit } from './routes/git.js';
 
 async function main() {
   const config = loadConfig(process.argv.slice(2));
@@ -47,6 +48,7 @@ async function main() {
     await registerClaudeCommands(api, config.dataDir);
     await registerSessions(api, mgr);
     await registerWorkspaceState(api, config.dataDir);
+    await registerGit(api, config.allowedRoots);
   });
 
   // Connection info & QR are gated by host check only — they expose URL+token.

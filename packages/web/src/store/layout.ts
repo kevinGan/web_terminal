@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type SidePanel = 'bookmarks' | 'history' | 'files' | 'snippets' | 'settings' | null;
+export type SidePanel = 'bookmarks' | 'history' | 'files' | 'git' | 'snippets' | 'settings' | null;
 
 interface LayoutState {
   drawerOpen: boolean;

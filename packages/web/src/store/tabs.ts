@@ -1,7 +1,10 @@
 import { create } from 'zustand';
 
+export type DiffKind = 'staged' | 'unstaged' | 'untracked';
+
 export type Pane =
   | { kind: 'leaf'; id: string; type: 'terminal'; sessionId?: string; cwd?: string; title?: string; claudeMode?: boolean }
+  | { kind: 'leaf'; id: string; type: 'diff'; cwd: string; file: string; diffKind: DiffKind; title?: string }
   | { kind: 'split'; id: string; dir: 'h' | 'v'; ratio: number; a: Pane; b: Pane };
 
 export interface Tab {
@@ -30,6 +33,12 @@ interface TabsState {
   setLeafClaudeMode: (leafId: string, claudeMode: boolean) => void;
   setSplitRatio: (splitId: string, ratio: number) => void;
   getActiveLeaf: () => Pane | null;
+  /**
+   * Reuse an existing diff tab if any (one is sufficient — clicking a different file
+   * just retargets it). Otherwise append a new tab containing a single diff leaf.
+   * In both cases the diff tab becomes the active tab.
+   */
+  openOrUpdateDiffTab: (cwd: string, file: string, diffKind: DiffKind) => void;
   hydrate: (snapshot: { tabs: Tab[]; activeTabId: string; idCounter: number }) => void;
 }
 
@@ -79,6 +88,12 @@ function firstLeaf(pane: Pane): Pane {
   return firstLeaf(pane.a);
 }
 
+/** First terminal leaf in a pane subtree, or null if none. */
+export function firstTerminal(pane: Pane): Pane | null {
+  if (pane.kind === 'leaf') return pane.type === 'terminal' ? pane : null;
+  return firstTerminal(pane.a) ?? firstTerminal(pane.b);
+}
+
 function findParentSplit(pane: Pane, leafId: string): Extract<Pane, { kind: 'split' }> | null {
   if (pane.kind === 'leaf') return null;
   if ((pane.a.kind === 'leaf' && pane.a.id === leafId) || (pane.b.kind === 'leaf' && pane.b.id === leafId)) {
@@ -112,6 +127,19 @@ function migrateLegacyPane(pane: unknown): Pane {
       ratio: typeof p.ratio === 'number' ? p.ratio : 0.5,
       a: migrateLegacyPane(p.a),
       b: migrateLegacyPane(p.b)
+    };
+  }
+  // Diff leaf (new pane type) — preserve as-is when restoring state.
+  if (p.type === 'diff' && typeof p.cwd === 'string' && typeof p.file === 'string') {
+    const dk = p.diffKind === 'staged' || p.diffKind === 'untracked' ? p.diffKind : 'unstaged';
+    return {
+      kind: 'leaf',
+      id: String(p.id),
+      type: 'diff',
+      cwd: p.cwd,
+      file: p.file,
+      diffKind: dk,
+      title: typeof p.title === 'string' ? p.title : undefined
     };
   }
   // Leaf
@@ -222,6 +250,17 @@ export const useTabsStore = create<TabsState>((set, get) => ({
   splitActive: (dir) => set((s) => {
     const tab = s.tabs.find((t) => t.id === s.activeTabId);
     if (!tab) return s;
+    const active = findLeaf(tab.root, tab.activeLeafId);
+    // Diff tabs are conceptually single-pane: a split would orphan the diff
+    // leaf from openOrUpdateDiffTab's "find existing" lookup (which only
+    // matches when a diff leaf is the tab's root). No-op instead.
+    if (active && active.kind === 'leaf' && active.type === 'diff') return s;
+    // Inherit cwd from the active terminal leaf so the new shell starts in
+    // the same dir.
+    const inheritedCwd =
+      active && active.kind === 'leaf' && active.type === 'terminal'
+        ? active.cwd
+        : undefined;
     const newLeafId = newId('leaf');
     const splitId = newId('split');
     const root = mapLeaf(tab.root, tab.activeLeafId, (leaf) => ({
@@ -230,7 +269,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       dir,
       ratio: 0.5,
       a: leaf,
-      b: { kind: 'leaf', id: newLeafId, type: 'terminal' }
+      b: { kind: 'leaf', id: newLeafId, type: 'terminal', cwd: inheritedCwd }
     }));
     return {
       tabs: s.tabs.map((t) => (t.id === tab.id ? { ...t, root, activeLeafId: newLeafId } : t))
@@ -291,8 +330,36 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     const tab = s.tabs.find((t) => t.id === s.activeTabId);
     if (!tab) return null;
     return findLeaf(tab.root, tab.activeLeafId);
-  }
+  },
+
+  openOrUpdateDiffTab: (cwd, file, diffKind) => set((s) => {
+    const label = diffTabLabel(file, diffKind);
+    const existing = s.tabs.find((t) => t.root.kind === 'leaf' && t.root.type === 'diff');
+    if (existing && existing.root.kind === 'leaf' && existing.root.type === 'diff') {
+      const newRoot: Pane = { ...existing.root, cwd, file, diffKind };
+      return {
+        tabs: s.tabs.map((t) =>
+          t.id === existing.id ? { ...t, label, root: newRoot, activeLeafId: newRoot.id } : t
+        ),
+        activeTabId: existing.id
+      };
+    }
+    const leafId = newId('leaf');
+    const tab: Tab = {
+      id: newId('tab'),
+      label,
+      root: { kind: 'leaf', id: leafId, type: 'diff', cwd, file, diffKind },
+      activeLeafId: leafId
+    };
+    return { tabs: [...s.tabs, tab], activeTabId: tab.id };
+  })
 }));
+
+function diffTabLabel(file: string, kind: DiffKind): string {
+  const base = file.split('/').pop() || file;
+  const tag = kind === 'staged' ? '●' : kind === 'untracked' ? '+' : '~';
+  return `${tag} ${base}`;
+}
 
 // (Active tab id is set by hydrate() on app boot.)
 
