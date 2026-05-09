@@ -7,8 +7,10 @@
 - 手机适配：竖屏底部虚拟修饰键栏（Esc/Tab/Ctrl+C/方向键…）+ 工具栏，横屏侧边栏，双指滑动切 Tab
 - 常用目录管理：手动 Pin 书签 + 从 `~/.zsh_history` 自动统计高频 cd 目标 + 侧边文件树点击即跳
 - 命令片段：保存常用命令，一键执行或注入
+- **Git 面板**：侧栏列出当前仓库的 staged / unstaged / untracked 改动，点击文件即在专用 Diff Tab（全工作区共用一个，避免 tab 爆炸）中渲染语法高亮 diff
+- **断线自愈**：WS 断开后客户端按指数退避自动重连；服务端短期保留 PTY，重连同 sessionId 即恢复（vim 等长程序不丢状态）
 
-技术栈：**Node.js + Fastify + node-pty + ws + React + Vite + xterm.js v5**。
+技术栈：**Node.js + Fastify + node-pty + ws + React + Vite + xterm.js v5 + @pierre/diffs**。
 
 ## 快速开始
 
@@ -66,7 +68,8 @@ pnpm start --port 8080 --host 127.0.0.1 --no-token
 
 - **复用 zshrc / 环境变量**：服务启动时在 `~/.web_terminal/zsh-init/` 写入一组 wrapper（`.zshenv` / `.zprofile` / `.zshrc` / `.zlogin`），这些 wrapper 会先 source 用户原始的同名文件再注入一个 `precmd` 钩子。spawn 时设置 `ZDOTDIR` 指向这个目录、`WEBTERM_USER_HOME` / `WEBTERM_USER_ZDOTDIR` 保存原始位置。这样既不污染用户配置，又能拿到完整环境。
 - **CWD 跟踪**：注入的 hook 在每次 prompt 之前发送 OSC `\e]1337;CurrentDir=<path>\a`（iTerm2 私有序列）。后端流式解析 PTY 输出，把 cwd 推送到前端，文件树/书签/标题随之更新。这种 OSC 序列被 xterm.js 默认忽略，不影响渲染。
-- **断线复活**：WS 断开后服务保留 PTY 30 秒，期间用同一 `sessionId` 重连可恢复（vim 等长程序不会丢状态）；超过 30s 才 kill。
+- **断线复活**：WS 断开后服务保留 PTY 30 秒，期间用同一 `sessionId` 重连可恢复（vim 等长程序不会丢状态）；超过 30s 才 kill。客户端侧带指数退避（500ms 起步、上限 10s、含抖动）+ 关闭码白名单（认证/策略类终止码不重试），服务端 `ready` 消息携带 `replayed` 标志告诉客户端是否需要回放本地 scrollback 快照，避免双重绘制。
+- **Git 面板**：所有 git 命令通过 `packages/server/src/git/exec.ts` 的 `runGit` 包装执行，传入 cwd 必须先经过 `realpath` + `--allow-root` 校验；diff 输出有 1MB 上限以防止巨型二进制文件吃掉内存。前端 Diff Tab 是全局唯一的——`openOrUpdateDiffTab` 复用已有 tab 而非每文件新开一个，符合"diff 是临时浏览"的心智模型。
 
 ## 故障排查
 
@@ -80,12 +83,15 @@ pnpm start --port 8080 --host 127.0.0.1 --no-token
 ```
 packages/server/        # Fastify + node-pty + ws
   src/pty/              # PTYSession, manager, OSC parser, ZDOTDIR wrapper
-  src/ws/terminal.ts    # /ws/terminal
-  src/routes/           # bookmarks / history / files / snippets / qr / sessions
+  src/ws/terminal.ts    # /ws/terminal — 含 ready{replayed} 协议
+  src/git/exec.ts       # runGit: 受限 cwd 下执行 git 子进程
+  src/routes/           # bookmarks / history / files / snippets / qr / sessions / git
   src/auth.ts           # token + LAN guard
 packages/web/           # React + Vite + xterm.js
-  src/components/       # Terminal, PaneTree, TabBar, Toolbar, Drawer, FileTree, ...
-  src/store/            # zustand: tabs (含 Pane 二叉树), layout, bookmarks, ...
+  src/components/       # Terminal, PaneTree, TabBar, Toolbar, Drawer, FileTree,
+                        # GitPanel, DiffPane, ...
+  src/api/              # ws.ts (含指数退避重连), git.ts, ...
+  src/store/            # zustand: tabs (含 Pane 二叉树 + diff leaf), layout, ...
   src/hooks/            # useResponsive, usePTY, useGestures
 scripts/
   fix-node-pty-perms.mjs   # postinstall: chmod +x spawn-helper
