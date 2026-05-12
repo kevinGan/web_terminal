@@ -3,24 +3,34 @@ import { existsSync, readFileSync, writeFileSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 
+function persistToken(dataDir: string, tok: string): void {
+  const file = join(dataDir, 'token');
+  writeFileSync(file, tok + '\n', { encoding: 'utf8', mode: 0o600 });
+  try { chmodSync(file, 0o600); } catch {}
+}
+
 export function loadOrCreateToken(dataDir: string): string {
   const file = join(dataDir, 'token');
   if (existsSync(file)) {
     const tok = readFileSync(file, 'utf8').trim();
-    if (tok.length >= 32) return tok;
+    // Accept any non-empty token previously written by the user; only fall back
+    // to fresh generation if the file is empty/whitespace.
+    if (tok.length >= 1) return tok;
   }
   const tok = randomBytes(32).toString('hex');
-  writeFileSync(file, tok + '\n', { encoding: 'utf8', mode: 0o600 });
-  try { chmodSync(file, 0o600); } catch {}
+  persistToken(dataDir, tok);
   return tok;
 }
 
 export function rotateToken(dataDir: string): string {
-  const file = join(dataDir, 'token');
   const tok = randomBytes(32).toString('hex');
-  writeFileSync(file, tok + '\n', { encoding: 'utf8', mode: 0o600 });
-  try { chmodSync(file, 0o600); } catch {}
+  persistToken(dataDir, tok);
   return tok;
+}
+
+/** Persist a user-supplied token. Caller is responsible for non-empty validation. */
+export function writeToken(dataDir: string, tok: string): void {
+  persistToken(dataDir, tok);
 }
 
 export interface AuthOptions {

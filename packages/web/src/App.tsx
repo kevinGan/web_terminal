@@ -3,6 +3,8 @@ import { TabBar } from './components/TabBar';
 import { PaneTree } from './components/PaneTree';
 import { Toolbar } from './components/Toolbar';
 import { Drawer } from './components/Drawer';
+import { GlobalSettingsModal } from './components/GlobalSettingsModal';
+import { useGlobalSettingsStore } from './store/globalSettings';
 import { useResponsive, isTouchPrimary } from './hooks/useResponsive';
 import { useGestures } from './hooks/useGestures';
 import { useTabsStore } from './store/tabs';
@@ -94,11 +96,19 @@ export function App() {
   useGestures(gestureHandlers);
 
   const layoutClass = `layout d-${responsive.device} o-${responsive.orientation}`;
+  const openGlobalSettings = useGlobalSettingsStore((s) => s.openModal);
 
   return (
     <div className={layoutClass}>
       <header className="topbar">
         <TabBar />
+        <button
+          className="iconbtn topbar-settings"
+          title="全局设置 (Token / 连接信息)"
+          onClick={openGlobalSettings}
+        >
+          ⚙
+        </button>
       </header>
       <main className="main">
         <Drawer />
@@ -123,6 +133,7 @@ export function App() {
         </section>
       </main>
       <Toolbar />
+      <GlobalSettingsModal />
     </div>
   );
 }

@@ -23,3 +23,8 @@ export function getToken(): string {
 export function clearToken(): void {
   sessionStorage.removeItem(KEY);
 }
+
+export function setStoredToken(tok: string): void {
+  if (tok) sessionStorage.setItem(KEY, tok);
+  else sessionStorage.removeItem(KEY);
+}

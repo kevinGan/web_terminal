@@ -22,6 +22,7 @@ import { registerQR } from './routes/qr.js';
 import { registerSessions } from './routes/sessions.js';
 import { registerWorkspaceState } from './routes/state.js';
 import { registerGit } from './routes/git.js';
+import { registerSettings } from './routes/settings.js';
 
 async function main() {
   const config = loadConfig(process.argv.slice(2));
@@ -49,13 +50,24 @@ async function main() {
     await registerSessions(api, mgr);
     await registerWorkspaceState(api, config.dataDir);
     await registerGit(api, config.allowedRoots);
+    await registerSettings(api, { dataDir: config.dataDir, authOpts });
   });
 
   // Connection info & QR are gated by host check only — they expose URL+token.
   // Token is REQUIRED to view the QR (which embeds the same token).
+  // The factory reads `authOpts.token` lazily so QR / connection info reflect
+  // any hot-updated custom token without a restart.
   app.register(async (api) => {
     api.addHook('onRequest', authHook);
-    await registerQR(api, () => buildConnectionUrl(config.host, config.port, token));
+    await registerQR(api, () => {
+      const ip = pickAdvertisedIp(config.host);
+      return {
+        host: config.host,
+        port: config.port,
+        ip,
+        url: buildConnectionUrl(config.host, config.port, authOpts.token)
+      };
+    });
   });
 
   registerTerminalWS(app, mgr, authOpts);
