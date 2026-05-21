@@ -18,6 +18,19 @@ function findLeafId(pane: Pane, id: string): boolean {
   return findLeafId(pane.a, id) || findLeafId(pane.b, id);
 }
 
+/** 在所有 tab 的 pane 树中根据 leafId 查找对应的叶子节点。 */
+function findLeafInState(tabs: Array<{ root: Pane }>, leafId: string): Pane | null {
+  for (const t of tabs) {
+    const found = _findLeaf(t.root, leafId);
+    if (found) return found;
+  }
+  return null;
+}
+function _findLeaf(pane: Pane, id: string): Pane | null {
+  if (pane.kind === 'leaf') return pane.id === id ? pane : null;
+  return _findLeaf(pane.a, id) ?? _findLeaf(pane.b, id);
+}
+
 export interface UsePTYOptions {
   leafId: string;
   initialSessionId?: string;
@@ -152,10 +165,14 @@ export function usePTY({ leafId, initialSessionId, initialCwd }: UsePTYOptions):
     window.addEventListener('pagehide', onPageHide);
 
     let lostConnection = false;
-    const conn = new PtyConn(
+    // 追踪"由本实例自身写入"的 sessionId，用于区分 swapPaneData 等外部更新
+    const selfSessionRef = { current: sessionIdRef.current };
+
+    /** 构造一个新 PtyConn，复用同一个 xterm 实例，不重建任何 UI。 */
+    const makeConn = (targetSessionId: string | undefined) => new PtyConn(
       () => ({
         type: 'init',
-        sessionId: sessionIdRef.current,
+        sessionId: targetSessionId,
         cols: term.cols,
         rows: term.rows,
         cwd: initialCwd
@@ -170,6 +187,7 @@ export function usePTY({ leafId, initialSessionId, initialCwd }: UsePTYOptions):
         onControl: (msg) => {
           if (msg.type === 'ready') {
             sessionIdRef.current = msg.sessionId;
+            selfSessionRef.current = msg.sessionId; // 标记为自身写入
             tabs.getState().setLeafSession(leafId, msg.sessionId);
             if (msg.cwd) tabs.getState().setLeafCwd(leafId, msg.cwd);
             if (msg.replayed) {
@@ -201,10 +219,11 @@ export function usePTY({ leafId, initialSessionId, initialCwd }: UsePTYOptions):
             term.writeln(`\r\n[process exited: code=${msg.exitCode}${msg.signal ? ` signal=${msg.signal}` : ''}]`);
           }
         },
-        onClose: () => {
+        onClose: (ev) => {
           // First close after a clean run prints once; reconnect attempts are
           // silent to avoid flooding the terminal during outages.
-          if (!lostConnection && !conn.isClosed) {
+          // 热切换主动关闭（code 1000）时不打印断连提示
+          if (!lostConnection && ev.code !== 1000) {
             term.write('\r\n\x1b[2;3m[disconnected — retrying…]\x1b[0m\r\n');
             lostConnection = true;
           }
@@ -212,10 +231,13 @@ export function usePTY({ leafId, initialSessionId, initialCwd }: UsePTYOptions):
         }
       }
     );
+
+    const conn = makeConn(sessionIdRef.current);
     conn.open();
     connRef.current = conn;
     const control = {
-      send: (text: string) => conn.sendInput(text),
+      // 通过 connRef 间接发送，热切换后新 conn 也能收到输入
+      send: (text: string) => connRef.current?.sendInput(text),
       focus: () => xtermRef.current?.focus(),
       blur: () => xtermRef.current?.blur(),
       isFocused: () => {
@@ -225,20 +247,44 @@ export function usePTY({ leafId, initialSessionId, initialCwd }: UsePTYOptions):
     };
     terminalRegistry.register(leafId, control);
 
-    const dispDataRaw = term.onData((data) => conn.sendInput(data));
-    const dispResize = term.onResize(({ cols, rows }) => conn.resize(cols, rows));
+    // 通过 connRef 间接路由，热切换后新 conn 也能收到输入/resize
+    const dispDataRaw = term.onData((data) => connRef.current?.sendInput(data));
+    const dispResize = term.onResize(({ cols, rows }) => connRef.current?.resize(cols, rows));
 
     const ro = new ResizeObserver(() => {
       try { fit.fit(); } catch {}
     });
     ro.observe(containerRef.current);
 
+    // 监听 store 变化，检测外部（swapPaneData）触发的 sessionId 替换，热切换 WS 连接
+    const unsub = useTabsStore.subscribe((state) => {
+      const leaf = findLeafInState(state.tabs, leafId);
+      if (!leaf || leaf.kind !== 'leaf' || leaf.type !== 'terminal') return;
+      const newSid = leaf.sessionId;
+      if (!newSid) return;                           // 尚未分配 sessionId，跳过
+      if (newSid === selfSessionRef.current) return; // 自身 ready 写入，跳过
+      if (newSid === sessionIdRef.current) return;   // 无实质变化，跳过
+      if (!connRef.current) return;                  // effect 已卸载
+
+      // 外部（swapPaneData）把这个 leafId 的 sessionId 换成了对方的 — 热切换
+      persistSnapshot();
+      connRef.current.close();                       // 关闭旧连接（code 1000，不触发重连）
+      sessionIdRef.current = newSid;
+      selfSessionRef.current = newSid;               // 预先标记，避免 ready 回调再次触发
+      lostConnection = false;
+      const newConn = makeConn(newSid);
+      connRef.current = newConn;
+      newConn.open();
+    });
+
     return () => {
+      unsub();
       ro.disconnect();
       dispDataRaw.dispose();
       dispResize.dispose();
       terminalRegistry.unregister(leafId, control);
-      conn.close();
+      connRef.current?.close();
+      connRef.current = null;
       // Final flush before dispose so we don't lose the most recent output.
       try { persistSnapshot(); } catch {}
       if (saveTimer) clearTimeout(saveTimer);
@@ -247,7 +293,6 @@ export function usePTY({ leafId, initialSessionId, initialCwd }: UsePTYOptions):
       term.dispose();
       xtermRef.current = null;
       fitRef.current = null;
-      connRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leafId]);

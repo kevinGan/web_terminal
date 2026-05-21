@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, type FileEntry } from '../api/http';
 import { activeCwd, cdActiveTerminal, runInActiveTerminal } from '../store/active';
 import { useRemoteStore } from '../store/bookmarks';
+import { useTabsStore } from '../store/tabs';
 import { isTouchPrimary } from '../hooks/useResponsive';
 
 interface Props { rootPath?: string }
@@ -27,6 +28,8 @@ export function FileTree({ rootPath }: Props = {}) {
   const [pinState, setPinState] = useState<PinFeedback>('idle');
   const pinResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchPrimary = isTouchPrimary();
+  const openOrUpdateFilePreviewTab = useTabsStore((s) => s.openOrUpdateFilePreviewTab);
+  const splitActiveWithFilePreview = useTabsStore((s) => s.splitActiveWithFilePreview);
   const pinPath = useRemoteStore((s) => s.pinPath);
   const bookmarks = useRemoteStore((s) => s.bookmarks);
 
@@ -129,7 +132,9 @@ export function FileTree({ rootPath }: Props = {}) {
         className="file-list"
         onTouchStart={touchPrimary ? dismissKeyboard : undefined}
       >
-        {entries.map((e) => (
+        {entries.map((e) => {
+          const previewType = isPreviewable(e.name);
+          return (
           <li key={e.path} className={`file-item type-${e.type}`}>
             <button
               className="row"
@@ -152,12 +157,39 @@ export function FileTree({ rootPath }: Props = {}) {
               <span className="icon">{e.type === 'dir' ? '📁' : e.type === 'symlink' ? '🔗' : '📄'}</span>
               <span className="name">{e.name}</span>
               {typeof e.size === 'number' && <span className="size">{formatSize(e.size)}</span>}
+              {previewType && (
+                <>
+                  <button
+                    className="preview-btn"
+                    title="在新标签页中预览"
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      openOrUpdateFilePreviewTab(e.path, e.name, previewType);
+                    }}
+                  >⊞</button>
+                  <button
+                    className="preview-btn"
+                    title="在右侧分屏预览"
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      splitActiveWithFilePreview(e.path, e.name, previewType);
+                    }}
+                  >⇉</button>
+                </>
+              )}
             </button>
           </li>
-        ))}
+          );
+        })}
       </ul>
     </div>
   );
+}
+
+function isPreviewable(name: string): 'md' | 'txt' | 'html' | null {
+  const ext = name.split('.').pop()?.toLowerCase();
+  if (ext === 'md' || ext === 'txt' || ext === 'html') return ext;
+  return null;
 }
 
 function formatSize(n: number): string {

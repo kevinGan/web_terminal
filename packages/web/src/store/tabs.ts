@@ -5,6 +5,7 @@ export type DiffKind = 'staged' | 'unstaged' | 'untracked';
 export type Pane =
   | { kind: 'leaf'; id: string; type: 'terminal'; sessionId?: string; cwd?: string; title?: string; claudeMode?: boolean }
   | { kind: 'leaf'; id: string; type: 'diff'; cwd: string; file: string; diffKind: DiffKind; title?: string }
+  | { kind: 'leaf'; id: string; type: 'file-preview'; filePath: string; fileName: string; fileType: 'md' | 'txt' | 'html'; cwd?: string; title?: string }
   | { kind: 'split'; id: string; dir: 'h' | 'v'; ratio: number; a: Pane; b: Pane };
 
 export interface Tab {
@@ -39,6 +40,11 @@ interface TabsState {
    * In both cases the diff tab becomes the active tab.
    */
   openOrUpdateDiffTab: (cwd: string, file: string, diffKind: DiffKind) => void;
+  openOrUpdateFilePreviewTab: (filePath: string, fileName: string, fileType: 'md' | 'txt' | 'html') => void;
+  splitActiveWithFilePreview: (filePath: string, fileName: string, fileType: 'md' | 'txt' | 'html') => void;
+  reorderTab: (fromIndex: number, toIndex: number) => void;
+  swapPaneData: (tabId: string, leafIdA: string, leafIdB: string) => void;
+  extractLeafToNewTab: (tabId: string, leafId: string) => void;
   hydrate: (snapshot: { tabs: Tab[]; activeTabId: string; idCounter: number }) => void;
 }
 
@@ -129,7 +135,7 @@ function migrateLegacyPane(pane: unknown): Pane {
       b: migrateLegacyPane(p.b)
     };
   }
-  // Diff leaf (new pane type) — preserve as-is when restoring state.
+  // Diff leaf — preserve as-is when restoring state.
   if (p.type === 'diff' && typeof p.cwd === 'string' && typeof p.file === 'string') {
     const dk = p.diffKind === 'staged' || p.diffKind === 'untracked' ? p.diffKind : 'unstaged';
     return {
@@ -139,6 +145,20 @@ function migrateLegacyPane(pane: unknown): Pane {
       cwd: p.cwd,
       file: p.file,
       diffKind: dk,
+      title: typeof p.title === 'string' ? p.title : undefined
+    };
+  }
+  // File-preview leaf — preserve as-is when restoring state.
+  if (p.type === 'file-preview' && typeof p.filePath === 'string' && typeof p.fileName === 'string') {
+    const ft = p.fileType === 'md' || p.fileType === 'txt' || p.fileType === 'html' ? p.fileType : 'txt';
+    return {
+      kind: 'leaf',
+      id: String(p.id),
+      type: 'file-preview',
+      filePath: p.filePath,
+      fileName: p.fileName,
+      fileType: ft,
+      cwd: typeof p.cwd === 'string' ? p.cwd : undefined,
       title: typeof p.title === 'string' ? p.title : undefined
     };
   }
@@ -254,7 +274,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     // Diff tabs are conceptually single-pane: a split would orphan the diff
     // leaf from openOrUpdateDiffTab's "find existing" lookup (which only
     // matches when a diff leaf is the tab's root). No-op instead.
-    if (active && active.kind === 'leaf' && active.type === 'diff') return s;
+    if (active && active.kind === 'leaf' && (active.type === 'diff' || active.type === 'file-preview')) return s;
     // Inherit cwd from the active terminal leaf so the new shell starts in
     // the same dir.
     const inheritedCwd =
@@ -352,6 +372,123 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       activeLeafId: leafId
     };
     return { tabs: [...s.tabs, tab], activeTabId: tab.id };
+  }),
+
+  openOrUpdateFilePreviewTab: (filePath, fileName, fileType) => set((s) => {
+    const existing = s.tabs.find((t) => t.root.kind === 'leaf' && t.root.type === 'file-preview');
+    if (existing && existing.root.kind === 'leaf' && existing.root.type === 'file-preview') {
+      const newRoot: Pane = { ...existing.root, filePath, fileName, fileType };
+      return {
+        tabs: s.tabs.map((t) =>
+          t.id === existing.id ? { ...t, label: fileName, root: newRoot, activeLeafId: newRoot.id } : t
+        ),
+        activeTabId: existing.id
+      };
+    }
+    const leafId = newId('leaf');
+    const tab: Tab = {
+      id: newId('tab'),
+      label: fileName,
+      root: { kind: 'leaf', id: leafId, type: 'file-preview', filePath, fileName, fileType },
+      activeLeafId: leafId
+    };
+    return { tabs: [...s.tabs, tab], activeTabId: tab.id };
+  }),
+
+  splitActiveWithFilePreview: (filePath, fileName, fileType) => set((s) => {
+    const tab = s.tabs.find((t) => t.id === s.activeTabId);
+    if (!tab) return s;
+    const active = findLeaf(tab.root, tab.activeLeafId);
+    if (!active || active.kind !== 'leaf' || active.type !== 'terminal') return s;
+    const newLeafId = newId('leaf');
+    const splitId = newId('split');
+    const root = mapLeaf(tab.root, tab.activeLeafId, (leaf) => ({
+      kind: 'split',
+      id: splitId,
+      dir: 'h',
+      ratio: 0.5,
+      a: leaf,
+      b: { kind: 'leaf', id: newLeafId, type: 'file-preview', filePath, fileName, fileType }
+    }));
+    return {
+      tabs: s.tabs.map((t) => (t.id === tab.id ? { ...t, root, activeLeafId: newLeafId } : t))
+    };
+  }),
+
+  /** Move tab at fromIndex to toIndex in the tabs array. No-op if same position. */
+  reorderTab: (fromIndex, toIndex) => set((s) => {
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return s;
+    if (fromIndex >= s.tabs.length || toIndex >= s.tabs.length) return s;
+    const tabs = [...s.tabs];
+    const [moved] = tabs.splice(fromIndex, 1);
+    if (moved) tabs.splice(toIndex, 0, moved);
+    return { tabs };
+  }),
+
+  /** 在同一 tab 内交换两个叶子的元数据（type/sessionId/cwd/title 等），
+   * 保留各自的 id 不变，因此 React key 不变，Terminal 组件实例不会重建，
+   * PTY 连接和 xterm 画面完全保留。
+   * split 节点在 pane 树中的位置（a/b 槽）同时交换，实现视觉上的位置互换。
+   * activeLeafId 不变（id 没变，激活的格子还是同一个）。 */
+  swapPaneData: (tabId, leafIdA, leafIdB) => set((s) => {
+    const tab = s.tabs.find((t) => t.id === tabId);
+    if (!tab) return s;
+    const leafA = findLeaf(tab.root, leafIdA);
+    const leafB = findLeaf(tab.root, leafIdB);
+    if (!leafA || !leafB || leafA.kind !== 'leaf' || leafB.kind !== 'leaf') return s;
+    if (leafA.id === leafB.id) return s;
+
+    // 只交换 id 以外的所有字段，保持各自 id 不动。
+    // 这样 React key 不变，xterm/PTY 实例完全保留，不会出现内容消失。
+    // 视觉上的"位置互换"靠 pane-drag-wrapper 的 CSS order 或标签显示实现，
+    // 实际上这里两个节点的 type/sessionId/cwd/title 互换后，subtab 标签会互换。
+    const { id: _ia, ...dataA } = leafA as unknown as Record<string, unknown>;
+    const { id: _ib, ...dataB } = leafB as unknown as Record<string, unknown>;
+    const newLeafA = { ...dataB, id: leafA.id } as Pane;
+    const newLeafB = { ...dataA, id: leafB.id } as Pane;
+
+    let root = mapLeaf(tab.root, leafIdA, () => newLeafA);
+    root = mapLeaf(root, leafIdB, () => newLeafB);
+
+    // id 不变，activeLeafId 不需要改
+    return {
+      tabs: s.tabs.map((t) => t.id === tabId ? { ...t, root } : t)
+    };
+  }),
+
+  /** Extract a leaf from its tab and move it into a brand-new tab. If the
+   * source tab ends up empty the tab is closed. The new tab is appended and
+   * becomes the active tab. No-op when the leaf is the only one in its tab. */
+  extractLeafToNewTab: (tabId, leafId) => set((s) => {
+    const tab = s.tabs.find((t) => t.id === tabId);
+    if (!tab) return s;
+    if (countLeaves(tab.root) <= 1) return s;
+    const leaf = findLeaf(tab.root, leafId);
+    if (!leaf || leaf.kind !== 'leaf') return s;
+
+    const newRoot = removeLeaf(tab.root, leafId);
+    const label = leaf.kind === 'leaf'
+      ? leaf.type === 'terminal' ? (leaf.title || (leaf.cwd ? leaf.cwd.split('/').pop() || leaf.cwd : 'shell'))
+      : leaf.type === 'diff' ? (leaf.file.split('/').pop() || leaf.file)
+      : leaf.fileName
+      : 'shell';
+    const newTab: Tab = {
+      id: newId('tab'),
+      label,
+      root: leaf,
+      activeLeafId: leaf.id
+    };
+
+    if (newRoot == null) {
+      const tabs = s.tabs.map((t) => t.id === tabId ? newTab : t);
+      return { tabs, activeTabId: newTab.id };
+    }
+
+    const newActive = tab.activeLeafId === leafId ? firstLeaf(newRoot).id : tab.activeLeafId;
+    const tabs = s.tabs.map((t) =>
+      t.id === tabId ? { ...t, root: newRoot, activeLeafId: newActive } : t
+    );
+    return { tabs: [...tabs, newTab], activeTabId: newTab.id };
   })
 }));
 
