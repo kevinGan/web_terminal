@@ -58,6 +58,16 @@ function mergeTabAsSplit(state, targetTabId, sourceTabId, edge) {
   const sourceTab = state.tabs.find(t => t.id === sourceTabId);
   if (!targetTab || !sourceTab) return state;
 
+  // Guard: diff/file-preview singleton invariant
+  if (
+    sourceTab.root.kind === 'leaf' &&
+    (sourceTab.root.type === 'diff' || sourceTab.root.type === 'file-preview')
+  ) return state;
+  if (
+    targetTab.root.kind === 'leaf' &&
+    (targetTab.root.type === 'diff' || targetTab.root.type === 'file-preview')
+  ) return state;
+
   const sourcePane = sourceTab.root;
   const dir = (edge === 'left' || edge === 'right') ? 'h' : 'v';
   const sourceFirst = (edge === 'left' || edge === 'top');
@@ -78,6 +88,7 @@ function mergeTabAsSplit(state, targetTabId, sourceTabId, edge) {
       ? { ...t, root, activeLeafId: firstLeaf(sourcePane).id }
       : t
     ),
+    activeTabId: state.activeTabId === sourceTabId ? targetTabId : state.activeTabId,
   };
 }
 
@@ -382,6 +393,73 @@ console.log('\n=== 综合场景 ===');
 
   const tabBRoot = result.tabs.find(t => t.id === 'tab-B').root;
   assert(tabBRoot.kind === 'split' && tabBRoot.a.id === 'leaf-1', '左侧是 tab-A 的内容');
+}
+
+// ---- 汇总 ----
+console.log(`\n结果: ${passed} 通过 / ${failed} 失败`);
+if (failed > 0) process.exit(1);
+
+{
+  // 跨 tab 将 leaf-1 从 tab-A 移到 tab-B 的 leaf-2 右侧
+  const tabA = { id: 'tab-A', label: 'A', root: split1, activeLeafId: 'leaf-1' };
+  const tabB = { id: 'tab-B', label: 'B', root: leaf3, activeLeafId: 'leaf-3' };
+  const state = { tabs: [tabA, tabB], activeTabId: 'tab-A' };
+
+  const result = moveLeafCrossTab(state, 'tab-A', 'leaf-1', 'tab-B', 'leaf-3', 'right');
+  // tab-A 应该只剩 leaf-2
+  const srcTab = result.tabs.find(t => t.id === 'tab-A');
+  assert(srcTab !== undefined, 'tab-A 还存在（仍有 leaf-2）');
+  assert(srcTab.root.kind === 'leaf' && srcTab.root.id === 'leaf-2', 'tab-A root 是 leaf-2');
+  // tab-B 应该是 split{leaf-3, leaf-1}
+  const dstTab = result.tabs.find(t => t.id === 'tab-B');
+  assert(dstTab.root.kind === 'split', 'tab-B root 变成 split');
+  assert(dstTab.root.a.id === 'leaf-3', 'a = 原 targetLeaf');
+  assert(dstTab.root.b.id === 'leaf-1', 'b = 移来的 sourceLeaf');
+  assert(dstTab.activeLeafId === 'leaf-1', '焦点给新来的 leaf');
+}
+
+{
+  // source tab 只有一个 leaf → 移走后 source tab 被删除
+  const tabA = { id: 'tab-A', label: 'A', root: leaf1, activeLeafId: 'leaf-1' };
+  const tabB = { id: 'tab-B', label: 'B', root: leaf2, activeLeafId: 'leaf-2' };
+  const state = { tabs: [tabA, tabB], activeTabId: 'tab-A' };
+
+  const result = moveLeafCrossTab(state, 'tab-A', 'leaf-1', 'tab-B', 'leaf-2', 'left');
+  assert(result.tabs.length === 1, 'tab-A 被移除（已空）');
+  assert(result.tabs[0].id === 'tab-B', '只剩 tab-B');
+  assert(result.activeTabId === 'tab-B', 'activeTabId 切换到 tab-B');
+  const root = result.tabs[0].root;
+  assert(root.kind === 'split' && root.a.id === 'leaf-1', 'leaf-1 在左侧');
+}
+
+{
+  // guard: source 是 diff leaf → 不变
+  const diffLeaf = { kind: 'leaf', id: 'diff-1', type: 'diff', cwd: '/', file: 'a.ts', diffKind: 'unstaged' };
+  const tabA = { id: 'tab-A', label: 'A', root: diffLeaf, activeLeafId: 'diff-1' };
+  const tabB = { id: 'tab-B', label: 'B', root: leaf2, activeLeafId: 'leaf-2' };
+  const state = { tabs: [tabA, tabB], activeTabId: 'tab-A' };
+  const result = moveLeafCrossTab(state, 'tab-A', 'diff-1', 'tab-B', 'leaf-2', 'right');
+  assert(result === state, 'diff leaf 跨 tab 移动 → guard 阻止，状态不变');
+}
+
+{
+  // guard: mergeTabAsSplit source 是 diff tab → 不变
+  const diffLeaf = { kind: 'leaf', id: 'diff-2', type: 'diff', cwd: '/', file: 'b.ts', diffKind: 'unstaged' };
+  const tabA = { id: 'tab-A', label: 'A', root: diffLeaf, activeLeafId: 'diff-2' };
+  const tabB = { id: 'tab-B', label: 'B', root: leaf1, activeLeafId: 'leaf-1' };
+  const state = { tabs: [tabA, tabB], activeTabId: 'tab-A' };
+  const result = mergeTabAsSplit(state, 'tab-B', 'tab-A', 'right');
+  assert(result === state, 'mergeTabAsSplit: diff source tab → guard 阻止，状态不变');
+}
+
+{
+  // mergeTabAsSplit: activeTabId 修正 — 拖走了 activeTab
+  const tabA = { id: 'tab-A', label: 'A', root: leaf1, activeLeafId: 'leaf-1' };
+  const tabB = { id: 'tab-B', label: 'B', root: leaf2, activeLeafId: 'leaf-2' };
+  const state = { tabs: [tabA, tabB], activeTabId: 'tab-A' }; // tab-A 是 active
+
+  const result = mergeTabAsSplit(state, 'tab-B', 'tab-A', 'right');
+  assert(result.activeTabId === 'tab-B', 'activeTabId 切换到 target tab（原 active tab 被移除）');
 }
 
 // ---- 汇总 ----
