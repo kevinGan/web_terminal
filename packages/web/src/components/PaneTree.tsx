@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
-import type { Pane, Tab } from '../store/tabs';
-import { useTabsStore, countLeaves } from '../store/tabs';
+import type { Pane, Tab, DropEdge } from '../store/tabs';
+import { useTabsStore, countLeaves, findLeaf } from '../store/tabs';
 import { isTouchPrimary } from '../hooks/useResponsive';
 import { Terminal } from './Terminal';
 import { DiffPane } from './DiffPane';
@@ -86,8 +86,30 @@ function getLeafLabel(pane: Pane & { kind: 'leaf' }): string {
   return pane.fileName;
 }
 
+/** 根据鼠标相对于矩形的位置判断靠近哪个边缘，用于分屏 drop 方向。 */
+function detectEdge(rect: DOMRect, clientX: number, clientY: number): DropEdge | null {
+  const relX = (clientX - rect.left) / rect.width;
+  const relY = (clientY - rect.top) / rect.height;
+  const T = 0.3;
+  const dLeft = relX, dRight = 1 - relX, dTop = relY, dBottom = 1 - relY;
+  const minD = Math.min(dLeft, dRight, dTop, dBottom);
+  if (minD > T) return 'center';
+  if (dLeft === minD) return 'left';
+  if (dRight === minD) return 'right';
+  if (dTop === minD) return 'top';
+  return 'bottom';
+}
+
+const hasLeafMime = (types: ReadonlyArray<string>) =>
+  types.includes('application/x-wt-leaf-data')
+  || (types as unknown as { contains?: (s: string) => boolean }).contains?.('application/x-wt-leaf-data');
+
+const hasTabMime = (types: ReadonlyArray<string>) =>
+  types.includes('application/x-wt-tab-id')
+  || (types as unknown as { contains?: (s: string) => boolean }).contains?.('application/x-wt-tab-id');
+
 /**
- * 包裹叶子 pane，实现子面板之间的拖拽交换。
+ * 包裹叶子 pane，实现子面板之间的拖拽交换和分屏。
  *
  * 关键设计：
  * - dragstart 时同步设置 document.body.classList.add('pane-dragging')
@@ -96,6 +118,9 @@ function getLeafLabel(pane: Pane & { kind: 'leaf' }): string {
  * - 这是同步 DOM 操作，在 dragstart 事件的同一帧内生效，不依赖 React 渲染时机。
  * - dragend 时同步清除，恢复正常交互。
  * - 触屏设备不启用（HTML5 drag 不支持）。
+ * - 支持 Tab 拖入分屏：从 TabBar 拖 Tab 到面板边缘 → mergeTabAsSplit
+ * - 支持 subtab 拖入分屏：拖 subtab 到另一面板边缘 → splitLeafWithPane / moveLeafToSplit
+ * - 中心区域 → 互换（同 tab）或忽略（跨 tab / Tab 来源）
  */
 function PaneDragWrapper({
   pane,
@@ -109,8 +134,13 @@ function PaneDragWrapper({
   children: React.ReactNode;
 }) {
   const swapPaneData = useTabsStore((s) => s.swapPaneData);
-  const [isDragOver, setIsDragOver] = useState(false);
+  const mergeTabAsSplit = useTabsStore((s) => s.mergeTabAsSplit);
+  const moveLeafToSplit = useTabsStore((s) => s.moveLeafToSplit);
+  const moveLeafCrossTab = useTabsStore((s) => s.moveLeafCrossTab);
   const [isDragging, setIsDragging] = useState(false);
+  const [dropEdge, setDropEdge] = useState<DropEdge | null>(null);
+  // Ref tracks the latest edge so handleDrop is never stale (Issue #3)
+  const dropEdgeRef = useRef<DropEdge | null>(null);
 
   if (isTouchPrimary()) return <>{children}</>;
 
@@ -123,8 +153,6 @@ function PaneDragWrapper({
       JSON.stringify({ leafId: pane.id, tabId: tab.id })
     );
     setIsDragging(true);
-    // 同步禁用所有 pane-body 直接子元素的 pointer-events，
-    // 防止 xterm canvas 拦截后续 dragover/drop 事件。
     document.body.classList.add('pane-dragging');
   };
 
@@ -133,37 +161,67 @@ function PaneDragWrapper({
     document.body.classList.remove('pane-dragging');
   };
 
-  const hasLeafMime = (types: ReadonlyArray<string>) =>
-    types.includes('application/x-wt-leaf-data')
-    || (types as unknown as { contains?: (s: string) => boolean }).contains?.('application/x-wt-leaf-data');
-
   const handleDragOver = (e: React.DragEvent) => {
-    if (!hasLeafMime(e.dataTransfer.types)) return;
+    if (!hasLeafMime(e.dataTransfer.types) && !hasTabMime(e.dataTransfer.types)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
-    setIsDragOver(true);
+    const rect = e.currentTarget.getBoundingClientRect();
+    const edge = detectEdge(rect, e.clientX, e.clientY);
+    dropEdgeRef.current = edge;
+    setDropEdge(edge);
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
     if (e.currentTarget.contains((e.nativeEvent as DragEvent).relatedTarget as Node)) return;
-    setIsDragOver(false);
+    dropEdgeRef.current = null;
+    setDropEdge(null);
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
-    setIsDragOver(false);
+    // Re-compute edge from event position to avoid stale closure (Issue #3)
+    const rect = e.currentTarget.getBoundingClientRect();
+    const edge = detectEdge(rect, e.clientX, e.clientY) ?? dropEdgeRef.current;
+    dropEdgeRef.current = null;
+    setDropEdge(null);
     document.body.classList.remove('pane-dragging');
+
+    // 来源 1: Tab drag → 边缘分屏，中心忽略
+    const tabIdRaw = e.dataTransfer.getData('application/x-wt-tab-id');
+    if (tabIdRaw) {
+      if (tabIdRaw === tab.id) return; // 拖到自己的 pane，忽略
+      if (!edge || edge === 'center') return; // 中心区域不做操作
+      mergeTabAsSplit(tab.id, tabIdRaw, edge);
+      return;
+    }
+
+    // 来源 2: Pane subtab drag → 中心=互换，边缘=分屏
     const raw = e.dataTransfer.getData('application/x-wt-leaf-data');
     if (!raw) return;
     let src: { leafId: string; tabId: string };
     try { src = JSON.parse(raw); } catch { return; }
-    if (src.leafId === pane.id || src.tabId !== tab.id) return;
-    swapPaneData(tab.id, src.leafId, pane.id);
+    if (src.leafId === pane.id) return;
+
+    if (!edge || edge === 'center') {
+      // 中心区域：互换（仅同 tab）
+      if (src.tabId !== tab.id) return;
+      swapPaneData(tab.id, src.leafId, pane.id);
+      return;
+    }
+
+    // 边缘分屏
+    if (src.tabId !== tab.id) {
+      // 跨 tab：原子操作 moveLeafCrossTab（Issue #2 fix）
+      moveLeafCrossTab(src.tabId, src.leafId, tab.id, pane.id, edge);
+    } else {
+      // 同 tab 内：移动 leaf 到目标处形成分屏
+      moveLeafToSplit(tab.id, src.leafId, pane.id, edge);
+    }
   };
 
   return (
     <div
-      className={`pane-drag-wrapper ${isDragging ? 'is-dragging' : ''} ${isDragOver ? 'is-drag-over' : ''}`}
+      className={`pane-drag-wrapper ${isDragging ? 'is-dragging' : ''} ${dropEdge ? 'is-drag-over' : ''}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -175,16 +233,24 @@ function PaneDragWrapper({
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
           onDragOver={(e) => {
-            if (!hasLeafMime(e.dataTransfer.types)) return;
+            if (!hasLeafMime(e.dataTransfer.types) && !hasTabMime(e.dataTransfer.types)) return;
             e.preventDefault();
             e.dataTransfer.dropEffect = 'move';
           }}
-          title="拖拽交换面板位置"
+          title="拖拽交换面板位置或拖到边缘分屏"
         >
           <span className="pane-subtab-label">{getLeafLabel(pane)}</span>
         </div>
       )}
-      <div className="pane-body">{children}</div>
+      <div className="pane-body">
+        {children}
+        {dropEdge && dropEdge !== 'center' && (
+          <div className={`drop-zone-overlay ${dropEdge}`} />
+        )}
+        {dropEdge === 'center' && (
+          <div className="drop-zone-overlay center" />
+        )}
+      </div>
     </div>
   );
 }

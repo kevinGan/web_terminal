@@ -224,11 +224,6 @@ input { font: inherit; color: inherit; }
   display: flex; flex-direction: column;
 }
 .pane-drag-wrapper.is-dragging { opacity: 0.5; }
-.pane-drag-wrapper.is-drag-over {
-  outline: 2px solid var(--accent-2);
-  outline-offset: -2px;
-  background: rgba(148, 226, 213, 0.06);
-}
 
 .pane-subtab {
   flex-shrink: 0;
@@ -266,6 +261,25 @@ input { font: inherit; color: inherit; }
    不依赖 React 渲染时机。 */
 body.pane-dragging .pane-body > * {
   pointer-events: none;
+}
+
+/* Drop zone overlay — 拖拽到面板边缘时显示分屏预览区域 */
+.drop-zone-overlay {
+  position: absolute;
+  z-index: 10;
+  pointer-events: none !important;
+  background: rgba(137, 180, 250, 0.15);
+  border: 2px dashed var(--accent);
+  transition: all 0.12s ease;
+}
+.drop-zone-overlay.left   { top: 0; left: 0; bottom: 0; width: 30%; }
+.drop-zone-overlay.right  { top: 0; right: 0; bottom: 0; width: 30%; }
+.drop-zone-overlay.top    { top: 0; left: 0; right: 0; height: 30%; }
+.drop-zone-overlay.bottom { bottom: 0; left: 0; right: 0; height: 30%; }
+.drop-zone-overlay.center {
+  inset: 0;
+  background: rgba(148, 226, 213, 0.08);
+  border: 2px solid var(--accent-2);
 }
 
 /* Drawer */

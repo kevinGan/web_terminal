@@ -125,12 +125,16 @@ export function TabBar() {
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('application/x-wt-tab-id', tabId);
     setDraggingTabId(tabId);
+    // 同步禁用 pane-body 子元素的 pointer-events，
+    // 让拖 Tab 经过面板时 xterm canvas 不拦截 dragover。
+    document.body.classList.add('pane-dragging');
   };
 
   const handleTabDragEnd = () => {
     setDraggingTabId(null);
     setDragOverIndex(null);
     setIsPaneDragOver(false);
+    document.body.classList.remove('pane-dragging');
   };
 
   const isTabDrag = (types: ReadonlyArray<string>) =>

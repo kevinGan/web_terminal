@@ -2,6 +2,8 @@ import { create } from 'zustand';
 
 export type DiffKind = 'staged' | 'unstaged' | 'untracked';
 
+export type DropEdge = 'left' | 'right' | 'top' | 'bottom' | 'center';
+
 export type Pane =
   | { kind: 'leaf'; id: string; type: 'terminal'; sessionId?: string; cwd?: string; title?: string; claudeMode?: boolean }
   | { kind: 'leaf'; id: string; type: 'diff'; cwd: string; file: string; diffKind: DiffKind; title?: string }
@@ -45,6 +47,15 @@ interface TabsState {
   reorderTab: (fromIndex: number, toIndex: number) => void;
   swapPaneData: (tabId: string, leafIdA: string, leafIdB: string) => void;
   extractLeafToNewTab: (tabId: string, leafId: string) => void;
+  /** 将 source tab 的整个 pane 树合并到 target tab 的 activeLeaf 位置，
+   *  根据 edge 方向创建分屏。source tab 被移除。 */
+  mergeTabAsSplit: (targetTabId: string, sourceTabId: string, edge: DropEdge) => void;
+  /** 在 target tab 的 targetLeaf 位置，将 sourcePane 作为新子面板插入分屏。 */
+  splitLeafWithPane: (targetTabId: string, targetLeafId: string, sourcePane: Pane, edge: DropEdge) => void;
+  /** 同 tab 内将 sourceLeaf 移动到 targetLeaf 位置的分屏（先移除源，再 split 目标）。 */
+  moveLeafToSplit: (tabId: string, sourceLeafId: string, targetLeafId: string, edge: DropEdge) => void;
+  /** 跨 tab 将 sourceLeaf 移动到 targetLeaf 位置分屏（原子操作：单次 set()）。 */
+  moveLeafCrossTab: (sourceTabId: string, sourceLeafId: string, targetTabId: string, targetLeafId: string, edge: DropEdge) => void;
   hydrate: (snapshot: { tabs: Tab[]; activeTabId: string; idCounter: number }) => void;
 }
 
@@ -489,7 +500,163 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       t.id === tabId ? { ...t, root: newRoot, activeLeafId: newActive } : t
     );
     return { tabs: [...tabs, newTab], activeTabId: newTab.id };
-  })
+  }),
+
+  /** 根据 edge 方向构造 split 节点：确定 dir 和 a/b 顺序。 */
+  mergeTabAsSplit: (targetTabId, sourceTabId, edge) => set((s) => {
+    if (targetTabId === sourceTabId) return s;
+    const targetTab = s.tabs.find((t) => t.id === targetTabId);
+    const sourceTab = s.tabs.find((t) => t.id === sourceTabId);
+    if (!targetTab || !sourceTab) return s;
+
+    // Guard: diff/file-preview singleton invariant — do not bury a singleton
+    // leaf inside a split, as openOrUpdateDiffTab/openOrUpdateFilePreviewTab
+    // look for `t.root.kind === 'leaf' && t.root.type === 'diff/file-preview'`.
+    if (
+      sourceTab.root.kind === 'leaf' &&
+      (sourceTab.root.type === 'diff' || sourceTab.root.type === 'file-preview')
+    ) return s;
+    if (
+      targetTab.root.kind === 'leaf' &&
+      (targetTab.root.type === 'diff' || targetTab.root.type === 'file-preview')
+    ) return s;
+
+    const sourcePane = sourceTab.root;
+    const dir = (edge === 'left' || edge === 'right') ? 'h' : 'v';
+    const sourceFirst = (edge === 'left' || edge === 'top');
+    const splitId = newId('split');
+    const root = mapLeaf(targetTab.root, targetTab.activeLeafId, (leaf) => ({
+      kind: 'split' as const,
+      id: splitId,
+      dir,
+      ratio: 0.5,
+      a: sourceFirst ? sourcePane : leaf,
+      b: sourceFirst ? leaf : sourcePane,
+    }));
+
+    const tabs = s.tabs.filter((t) => t.id !== sourceTabId);
+    return {
+      tabs: tabs.map((t) => t.id === targetTabId
+        ? { ...t, root, activeLeafId: firstLeaf(sourcePane).id }
+        : t
+      ),
+      // Fix: if the dragged-away tab was the active tab, switch to target
+      activeTabId: s.activeTabId === sourceTabId ? targetTabId : s.activeTabId,
+    };
+  }),
+
+  /** 在 targetLeaf 位置插入 sourcePane 形成分屏。 */
+  splitLeafWithPane: (targetTabId, targetLeafId, sourcePane, edge) => set((s) => {
+    const tab = s.tabs.find((t) => t.id === targetTabId);
+    if (!tab) return s;
+    if (!findLeaf(tab.root, targetLeafId)) return s;
+    // Guard: do not bury diff/file-preview singleton leaf in a split
+    if (sourcePane.kind === 'leaf' && (sourcePane.type === 'diff' || sourcePane.type === 'file-preview')) return s;
+
+    const dir = (edge === 'left' || edge === 'right') ? 'h' : 'v';
+    const sourceFirst = (edge === 'left' || edge === 'top');
+    const splitId = newId('split');
+    const root = mapLeaf(tab.root, targetLeafId, (leaf) => ({
+      kind: 'split' as const,
+      id: splitId,
+      dir,
+      ratio: 0.5,
+      a: sourceFirst ? sourcePane : leaf,
+      b: sourceFirst ? leaf : sourcePane,
+    }));
+
+    return {
+      tabs: s.tabs.map((t) => t.id === targetTabId
+        ? { ...t, root, activeLeafId: firstLeaf(sourcePane).id }
+        : t
+      ),
+    };
+  }),
+
+  /** 同 tab 内：将 sourceLeafId 从树中移除，在 targetLeafId 位置创建分屏。 */
+  moveLeafToSplit: (tabId, sourceLeafId, targetLeafId, edge) => set((s) => {
+    const tab = s.tabs.find((t) => t.id === tabId);
+    if (!tab) return s;
+    if (sourceLeafId === targetLeafId) return s;
+    const sourceLeaf = findLeaf(tab.root, sourceLeafId);
+    if (!sourceLeaf) return s;
+
+    // 先移除 source leaf
+    const rootAfterRemove = removeLeaf(tab.root, sourceLeafId);
+    if (!rootAfterRemove) return s; // 不应发生（至少还有 targetLeaf）
+
+    // targetLeafId 可能因移除而改变了位置，但 id 不变，仍然可以 mapLeaf
+    if (!findLeaf(rootAfterRemove, targetLeafId)) return s;
+
+    const dir = (edge === 'left' || edge === 'right') ? 'h' : 'v';
+    const sourceFirst = (edge === 'left' || edge === 'top');
+    const splitId = newId('split');
+    const root = mapLeaf(rootAfterRemove, targetLeafId, (leaf) => ({
+      kind: 'split' as const,
+      id: splitId,
+      dir,
+      ratio: 0.5,
+      a: sourceFirst ? sourceLeaf : leaf,
+      b: sourceFirst ? leaf : sourceLeaf,
+    }));
+
+    return {
+      tabs: s.tabs.map((t) => t.id === tabId
+        ? { ...t, root, activeLeafId: firstLeaf(sourceLeaf).id }
+        : t
+      ),
+    };
+  }),
+
+  /** 跨 tab 将 sourceLeaf 从 sourceTab 移动到 targetTab 的 targetLeaf 位置分屏。
+   *  原子操作：单次 set() 完成"提取 + 分屏"，避免两次 set() 的中间状态。
+   *  Guard: diff/file-preview singleton leaf 不允许跨 tab 迁移分屏。 */
+  moveLeafCrossTab: (sourceTabId, sourceLeafId, targetTabId, targetLeafId, edge) => set((s) => {
+    if (sourceTabId === targetTabId) return s;
+    const sourceTab = s.tabs.find((t) => t.id === sourceTabId);
+    const targetTab = s.tabs.find((t) => t.id === targetTabId);
+    if (!sourceTab || !targetTab) return s;
+
+    const sourceLeaf = findLeaf(sourceTab.root, sourceLeafId);
+    if (!sourceLeaf || sourceLeaf.kind !== 'leaf') return s;
+    // Guard: diff/file-preview singleton leaf must not be moved into a split
+    if (sourceLeaf.type === 'diff' || sourceLeaf.type === 'file-preview') return s;
+
+    if (!findLeaf(targetTab.root, targetLeafId)) return s;
+
+    // Remove source leaf from source tab
+    const newSourceRoot = removeLeaf(sourceTab.root, sourceLeafId);
+    const dir = (edge === 'left' || edge === 'right') ? 'h' : 'v';
+    const sourceFirst = (edge === 'left' || edge === 'top');
+    const splitId = newId('split');
+    const newTargetRoot = mapLeaf(targetTab.root, targetLeafId, (leaf) => ({
+      kind: 'split' as const,
+      id: splitId,
+      dir,
+      ratio: 0.5,
+      a: sourceFirst ? sourceLeaf : leaf,
+      b: sourceFirst ? leaf : sourceLeaf,
+    }));
+
+    const tabs = s.tabs.flatMap((t) => {
+      if (t.id === sourceTabId) {
+        if (newSourceRoot == null) return []; // source tab is now empty — remove it
+        const newActive = t.activeLeafId === sourceLeafId ? firstLeaf(newSourceRoot).id : t.activeLeafId;
+        return [{ ...t, root: newSourceRoot, activeLeafId: newActive }];
+      }
+      if (t.id === targetTabId) {
+        return [{ ...t, root: newTargetRoot, activeLeafId: firstLeaf(sourceLeaf).id }];
+      }
+      return [t];
+    });
+
+    // If source tab was removed and it was the active tab, fall back to target tab
+    const stillHasSource = tabs.some((t) => t.id === sourceTabId);
+    const activeTabId =
+      !stillHasSource && s.activeTabId === sourceTabId ? targetTabId : s.activeTabId;
+
+    return { tabs, activeTabId };
+  }),
 }));
 
 function diffTabLabel(file: string, kind: DiffKind): string {
