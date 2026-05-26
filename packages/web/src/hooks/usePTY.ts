@@ -11,7 +11,33 @@ import { terminalRegistry } from '../store/terminalRegistry';
 import { usePromptDetector } from './usePromptDetector';
 import { useClaudeModeDetector } from './useClaudeModeDetector';
 import { useNotifyStore } from '../store/notifications';
+import { isTouchPrimary } from '../hooks/useResponsive';
 import type { Pane } from '../store/tabs';
+
+/** 复制文本到剪贴板，Clipboard API 失败时降级到 execCommand */
+function copyToClipboard(text: string): void {
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).catch(() => execCopy(text));
+    return;
+  }
+  execCopy(text);
+}
+
+function execCopy(text: string): void {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand('copy');
+  } catch {
+    // 剪贴板不可用，静默失败
+  } finally {
+    document.body.removeChild(ta);
+  }
+}
 
 function findLeafId(pane: Pane, id: string): boolean {
   if (pane.kind === 'leaf') return pane.id === id;
@@ -133,6 +159,26 @@ export function usePTY({ leafId, initialSessionId, initialCwd }: UsePTYOptions):
     term.loadAddon(serialize);
 
     term.open(containerRef.current);
+    // 鼠标左键选中文字后自动复制到剪贴板
+    let copiedTimer: ReturnType<typeof setTimeout> | null = null;
+    const onMouseUp = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      const sel = term.getSelection();
+      if (!sel) return;
+      copyToClipboard(sel);
+      const el = term.element;
+      if (el) {
+        if (copiedTimer) clearTimeout(copiedTimer);
+        el.setAttribute('data-copied', '');
+        copiedTimer = setTimeout(() => el.removeAttribute('data-copied'), 1500);
+      }
+    };
+    term.element?.addEventListener('mouseup', onMouseUp);
+    // 移动端：默认 readOnly 阻止系统键盘弹出，只在主动点按 ⌨ 按钮时移除
+    if (isTouchPrimary()) {
+      const ta = term.textarea;
+      if (ta) ta.readOnly = true;
+    }
     try { fit.fit(); } catch {}
 
     xtermRef.current = term;
@@ -238,8 +284,20 @@ export function usePTY({ leafId, initialSessionId, initialCwd }: UsePTYOptions):
     const control = {
       // 通过 connRef 间接发送，热切换后新 conn 也能收到输入
       send: (text: string) => connRef.current?.sendInput(text),
-      focus: () => xtermRef.current?.focus(),
-      blur: () => xtermRef.current?.blur(),
+      focus: () => {
+        if (isTouchPrimary()) {
+          const ta = xtermRef.current?.textarea;
+          if (ta) ta.readOnly = false;
+        }
+        xtermRef.current?.focus();
+      },
+      blur: () => {
+        xtermRef.current?.blur();
+        if (isTouchPrimary()) {
+          const ta = xtermRef.current?.textarea;
+          if (ta) ta.readOnly = true;
+        }
+      },
       isFocused: () => {
         const ta = xtermRef.current?.textarea;
         return ta != null && document.activeElement === ta;
@@ -288,6 +346,8 @@ export function usePTY({ leafId, initialSessionId, initialCwd }: UsePTYOptions):
       // Final flush before dispose so we don't lose the most recent output.
       try { persistSnapshot(); } catch {}
       if (saveTimer) clearTimeout(saveTimer);
+      if (copiedTimer) clearTimeout(copiedTimer);
+      term.element?.removeEventListener('mouseup', onMouseUp);
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('pagehide', onPageHide);
       term.dispose();
@@ -310,8 +370,20 @@ export function usePTY({ leafId, initialSessionId, initialCwd }: UsePTYOptions):
       if (!conn) return;
       conn.sendInput(text);
     },
-    focus: () => xtermRef.current?.focus(),
-    blur: () => xtermRef.current?.blur(),
+    focus: () => {
+      if (isTouchPrimary()) {
+        const ta = xtermRef.current?.textarea;
+        if (ta) ta.readOnly = false;
+      }
+      xtermRef.current?.focus();
+    },
+    blur: () => {
+      xtermRef.current?.blur();
+      if (isTouchPrimary()) {
+        const ta = xtermRef.current?.textarea;
+        if (ta) ta.readOnly = true;
+      }
+    },
     isReady
   };
 }

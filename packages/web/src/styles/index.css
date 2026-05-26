@@ -209,6 +209,31 @@ input { font: inherit; color: inherit; }
 }
 .xterm, .xterm-viewport, .xterm-screen { background: transparent !important; }
 
+/* 选中即复制反馈 */
+.xterm[data-copied]::after {
+  content: 'Copied!';
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  background: #a6e3a1;
+  color: #1e1e2e;
+  padding: 2px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+  opacity: 0;
+  animation: copied-toast 1.5s ease;
+  pointer-events: none;
+  z-index: 10;
+}
+
+@keyframes copied-toast {
+  0%   { opacity: 0; transform: translateY(-6px); }
+  12%  { opacity: 1; transform: translateY(0); }
+  70%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
 /* react-resizable-panels handle */
 .resize-handle {
   background: var(--bg-elev-1);
@@ -447,7 +472,7 @@ body.pane-dragging .pane-body > * {
 }
 .toolbar.pos-bottom {
   display: flex; flex-direction: column;
-  padding: 4px;
+  padding: 0;
 }
 .toolbar.pos-side {
   display: none;  /* hidden on desktop — toolbar functions live in drawer + tabbar */
@@ -478,11 +503,11 @@ body.pane-dragging .pane-body > * {
   margin-bottom: 4px;
 }
 .vk {
-  padding: 9px 0;
+  padding: 11px 0;
   background: var(--bg-elev-2);
   color: var(--fg);
-  border-radius: var(--radius);
-  font-size: 12px;
+  border-radius: 9px;
+  font-size: 13px;
   user-select: none;
   text-align: center;
   white-space: nowrap;
@@ -498,7 +523,12 @@ body.pane-dragging .pane-body > * {
 }
 .vk.mode { background: var(--bg-elev-3); color: var(--accent-2); font-weight: 600; }
 .vk.enter { background: var(--accent); color: #11111b; font-weight: 600; }
-.vk.danger { background: var(--bg-elev-3); color: var(--danger); }
+.vk.danger {
+  background: rgba(243, 139, 168, 0.1);
+  color: var(--danger);
+  border: 1px solid rgba(243, 139, 168, 0.18);
+}
+.vk.danger:active { background: var(--danger); color: #11111b; border-color: transparent; }
 .vk.picker { background: var(--bg-elev-3); color: var(--warn); font-weight: 600; }
 .vk.voice { background: var(--bg-elev-3); color: var(--accent-2); }
 .vk.kbd { background: var(--bg-elev-3); color: var(--accent); font-size: 18px; }
@@ -1036,5 +1066,309 @@ body.pane-dragging .pane-body > * {
   .modal-backdrop { padding: 0; }
   .modal { width: 100%; max-height: 100vh; height: 100%; border-radius: 0; }
   .qr-img { width: 160px; height: 160px; }
+}
+
+/* ── Mobile tab picker ─────────────────────────────────────────────── */
+
+/* Trigger button — fills the flex gap between drawer toggle and + button */
+.tab-picker-trigger {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 0 10px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid var(--accent);
+  color: var(--fg);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  overflow: hidden;
+}
+.tab-picker-trigger-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tab-picker-trigger-arrow {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--fg-faint);
+}
+
+/* Backdrop */
+.tab-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+/* Bottom sheet */
+.tab-picker-sheet {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 201;
+  background: var(--bg-elev-2);
+  border-top: 1px solid var(--border);
+  border-radius: 12px 12px 0 0;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  max-height: 70vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Drag handle */
+.tab-picker-handle {
+  width: 36px;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  margin: 10px auto 6px;
+}
+
+/* Tab rows */
+.tab-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 13px 16px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-faint);
+  font-size: 14px;
+}
+.tab-picker-row:active { background: var(--bg-elev-3); }
+.tab-picker-row.is-active { color: var(--accent); }
+
+.tab-picker-new {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+  color: var(--accent);
+  font-size: 15px;
+  cursor: pointer;
+  user-select: none;
+}
+.tab-picker-new:active { background: var(--bg-elev-3); }
+
+.tab-picker-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-picker-close {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--fg-faint);
+  font-size: 14px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.tab-picker-close:active { background: var(--bg-elev-3); color: var(--fg); }
+.tab-picker-close.confirm { color: var(--accent); }
+
+/* ── Floating Action Button (mobile portrait) ──────────────────────── */
+
+.fab {
+  position: fixed;
+  z-index: 50;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--bg-elev-3);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  font-size: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  touch-action: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.fab.is-open {
+  background: var(--accent);
+  color: #1e1e2e;
+  font-size: 16px;
+}
+
+/* Backdrop — closes the menu when tapping outside */
+.fab-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 48;
+}
+
+/* Action grid panel */
+.fab-menu {
+  position: fixed;
+  z-index: 49;
+  display: grid;
+  grid-template-columns: repeat(3, 44px);
+  gap: 8px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.55);
+}
+
+/* Individual action buttons inside the FAB menu */
+.fab-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  background: var(--bg-elev-3);
+  border: none;
+  color: var(--fg-dim);
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.fab-btn:active { background: var(--bg-elev-1); }
+.fab-btn.on  { background: var(--accent); color: #1e1e2e; }
+.fab-btn.pin { color: var(--accent-2); }
+
+/* ── System stats bar ──────────────────────────────────────────────── */
+.sys-stats {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  flex-wrap: nowrap;
+  gap: 4px;
+  padding: 3px 10px;
+  background: var(--bg-elev-2);
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+  min-height: 22px;
+}
+.sys-stat-item {
+  font-size: 11px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+.sys-stat-item b {
+  font-weight: 700;
+  color: var(--fg);
+}
+.sys-stat-sep {
+  font-size: 11px;
+  color: var(--border);
+  margin: 0 2px;
+  flex-shrink: 0;
+}
+.sys-stat-loading {
+  opacity: 0.4;
+}
+
+/* ── Swipe pager for VirtualKeys ───────────────────────────────────── */
+.vk-pager-wrap {
+  overflow: hidden;
+}
+
+.vk-slider {
+  display: flex;
+  width: 200%;
+  will-change: transform;
+  /* initial transform applied by JS via useEffect */
+}
+
+.vk-page {
+  width: 50%;   /* half of slider = 100% of viewport */
+  flex-shrink: 0;
+  padding: 6px;
+  box-sizing: border-box;
+  background: var(--bg-elev-1);
+}
+
+/* Pager dots — capsule shape */
+.vk-dots {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0 3px;
+}
+.vk-dots span {
+  display: block;
+  width: 6px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  cursor: pointer;
+  transition: background 0.2s ease, width 0.2s ease;
+}
+.vk-dots span.active {
+  background: var(--accent);
+  width: 16px;
+}
+
+/* ── Keyboard multi-row layout (Page 0 + Page 1) ────────────────────── */
+.vk-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 2;       /* 2:1 ratio with vk-enter-full (flex:1) → rows=2/3, enter=1/3 */
+  min-width: 0;
+}
+.vk-row {
+  display: flex;
+  gap: 5px;
+}
+/* Each key in a row stretches equally */
+.vk-row .vk {
+  flex: 1;
+  min-width: 0;
+}
+/* Taller last row */
+.vk-row-tall .vk,
+.vk-tall {
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+
+/* ── Normal keyboard bottom: rows + Enter ───────────────────────────── */
+.vk-normal-bottom {
+  display: flex;
+  gap: 5px;
+  margin-top: 5px;
+  align-items: stretch;
+}
+
+/* Full-height Enter key beside the rows */
+.vk-enter-full {
+  flex: 1;
+  min-width: 0;
+  align-self: stretch;
+  height: auto !important;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  background: rgba(137, 180, 250, 0.12) !important;
+  border: 1px solid rgba(137, 180, 250, 0.22) !important;
+  color: var(--accent) !important;
+  font-weight: 600;
 }
 
